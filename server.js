@@ -398,6 +398,9 @@ async function route(req, res) {
   if (url.pathname === "/api/login" && req.method === "POST") {
     if (!requireAdminConfig(res)) return;
     const body = await readJson(req);
+    console.log("[DEBUG] ADMIN_PASSWORD length:", ADMIN_PASSWORD.length);
+    console.log("[DEBUG] Received password length:", body.password?.length);
+    console.log("[DEBUG] Passwords match:", body.password === ADMIN_PASSWORD);
     if (body.password !== ADMIN_PASSWORD) {
       send(res, 401, { error: "invalid_password" });
       return;
