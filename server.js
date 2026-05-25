@@ -76,6 +76,29 @@ function slugify(value) {
     .slice(0, 80) || "track";
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function absoluteUrl(req, pathname) {
+  const rawHost = req.headers["x-forwarded-host"] || req.headers.host || "localhost";
+  const host = String(Array.isArray(rawHost) ? rawHost[0] : rawHost).split(",")[0].trim();
+  const rawProtocol = req.headers["x-forwarded-proto"];
+  const forwardedProtocol = rawProtocol ? String(Array.isArray(rawProtocol) ? rawProtocol[0] : rawProtocol).split(",")[0].trim() : "";
+  const protocol = forwardedProtocol || (/^(localhost|127\.0\.0\.1|\[::1\])(?::|$)/.test(host) ? "http" : "https");
+  return new URL(pathname, `${protocol}://${host}`).href;
+}
+
+function trackPath(track) {
+  const shortCode = String(track.id || "").slice(0, 4).toLowerCase();
+  return `/track/${encodeURIComponent(`${slugify(track.title)}-${shortCode}`)}`;
+}
+
 async function ensureStorage() {
   await fsp.mkdir(MUSIC_DIR, { recursive: true });
   await fsp.mkdir(COVER_DIR, { recursive: true });
@@ -129,6 +152,50 @@ async function listTracks({ admin = false } = {}) {
     .filter((track) => files.has(track.file))
     .filter((track) => admin || track.published)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+async function findPublishedTrackByKey(key) {
+  const tracks = await listTracks({ admin: false });
+  const normalizedKey = slugify(key);
+  return tracks.find((track) => normalizedKey === `${slugify(track.title)}-${String(track.id || "").slice(0, 4).toLowerCase()}`)
+    || tracks.find((track) => slugify(track.title) === normalizedKey)
+    || tracks.find((track) => track.id === key);
+}
+
+async function serveAppHtml(res, extraHead = "") {
+  const indexPath = path.join(PUBLIC_DIR, "index.html");
+  const html = await fsp.readFile(indexPath, "utf8");
+  const nextHtml = extraHead
+    ? html.replace(/<title>.*?<\/title>/i, "").replace("</head>", `${extraHead}\n  </head>`)
+    : html;
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-cache"
+  });
+  res.end(nextHtml);
+}
+
+async function serveTrackPage(req, res, track) {
+  const title = `${track.title} - Qiaomu Music`;
+  const description = [track.artist, track.album, track.source].filter(Boolean).join(" · ");
+  const pageUrl = absoluteUrl(req, trackPath(track));
+  const imageUrl = track.coverUrl ? absoluteUrl(req, track.coverUrl) : "";
+  const meta = [
+    `<title>${escapeHtml(title)}</title>`,
+    `<link rel="canonical" href="${escapeHtml(pageUrl)}" />`,
+    `<meta name="description" content="${escapeHtml(description)}" />`,
+    `<meta property="og:type" content="music.song" />`,
+    `<meta property="og:site_name" content="Qiaomu Music" />`,
+    `<meta property="og:title" content="${escapeHtml(track.title)}" />`,
+    `<meta property="og:description" content="${escapeHtml(description)}" />`,
+    `<meta property="og:url" content="${escapeHtml(pageUrl)}" />`,
+    imageUrl ? `<meta property="og:image" content="${escapeHtml(imageUrl)}" />` : "",
+    imageUrl ? `<meta name="twitter:card" content="summary_large_image" />` : `<meta name="twitter:card" content="summary" />`,
+    `<meta name="twitter:title" content="${escapeHtml(track.title)}" />`,
+    `<meta name="twitter:description" content="${escapeHtml(description)}" />`,
+    imageUrl ? `<meta name="twitter:image" content="${escapeHtml(imageUrl)}" />` : ""
+  ].filter(Boolean).join("\n    ");
+  await serveAppHtml(res, `    ${meta}`);
 }
 
 function sign(value) {
@@ -426,6 +493,17 @@ async function route(req, res) {
     return;
   }
 
+  const publicTrackApiMatch = /^\/api\/tracks\/([^/]+)$/.exec(url.pathname);
+  if (publicTrackApiMatch) {
+    const track = await findPublishedTrackByKey(decodeURIComponent(publicTrackApiMatch[1]));
+    if (!track) {
+      send(res, 404, { error: "track_not_found" });
+      return;
+    }
+    send(res, 200, { track });
+    return;
+  }
+
   if (url.pathname === "/api/admin/tracks") {
     if (!requireAdmin(req, res)) return;
     if (req.method === "GET") {
@@ -476,6 +554,15 @@ async function route(req, res) {
     return;
   }
 
+  const trackPageMatch = /^\/track\/([^/]+)(?:\/.*)?$/.exec(url.pathname);
+  if (trackPageMatch) {
+    const track = await findPublishedTrackByKey(decodeURIComponent(trackPageMatch[1]));
+    if (track) {
+      await serveTrackPage(req, res, track);
+      return;
+    }
+  }
+
   const safePath = url.pathname === "/" ? "index.html" : url.pathname.replace(/^\/+/, "");
   let filePath = path.join(PUBLIC_DIR, safePath);
   if (!filePath.startsWith(PUBLIC_DIR)) {
@@ -486,7 +573,8 @@ async function route(req, res) {
     const stat = await fsp.stat(filePath);
     if (stat.isDirectory()) filePath = path.join(filePath, "index.html");
   } catch {
-    filePath = path.join(PUBLIC_DIR, "index.html");
+    await serveAppHtml(res);
+    return;
   }
   const ext = path.extname(filePath);
   const contentType = ext === ".css" ? "text/css; charset=utf-8" : ext === ".js" ? "text/javascript; charset=utf-8" : ext === ".svg" ? "image/svg+xml" : "text/html; charset=utf-8";

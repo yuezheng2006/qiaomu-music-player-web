@@ -21,6 +21,7 @@ import {
   Repeat2,
   Search,
   Settings,
+  Share2,
   Shuffle,
   SkipBack,
   SkipForward,
@@ -88,6 +89,28 @@ const DEFAULT_SETTINGS: PlayerSettings = {
   visualizerEnabled: true,
   visualizerStyle: "ring",
   visualizerPosition: "center"
+};
+
+const slugifyTrackTitle = (value: string) => value
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "-")
+  .replace(/^-+|-+$/g, "")
+  .slice(0, 80) || "track";
+
+const trackPath = (track: Track) => `/track/${encodeURIComponent(`${slugifyTrackTitle(track.title)}-${track.id.slice(0, 4).toLowerCase()}`)}`;
+
+const getInitialTrackKey = () => {
+  if (typeof window === "undefined") return "";
+  const match = /^\/track\/([^/]+)/.exec(window.location.pathname);
+  return match ? decodeURIComponent(match[1]) : "";
+};
+
+const matchesTrackKey = (track: Track, key: string) => {
+  const normalizedKey = slugifyTrackTitle(key);
+  return normalizedKey === `${slugifyTrackTitle(track.title)}-${track.id.slice(0, 4).toLowerCase()}`
+    || normalizedKey === slugifyTrackTitle(track.title)
+    || key === track.id;
 };
 
 const THEMES: Record<ThemeId, {
@@ -355,6 +378,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const handlePopState = () => {
+      const trackKey = getInitialTrackKey();
+      if (!trackKey) return;
+      const nextIndex = tracks.findIndex((track) => matchesTrackKey(track, trackKey));
+      if (nextIndex >= 0) {
+        setActiveIndex(nextIndex);
+        setView("home");
+      }
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [tracks]);
+
+  useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
     audio.volume = volume / 100;
@@ -428,14 +465,27 @@ export default function App() {
     window.localStorage.setItem(PLAY_COUNTS_KEY, JSON.stringify(playCounts));
   }, [playCounts]);
 
+  useEffect(() => {
+    if (!activeTrack) {
+      document.title = "Qiaomu Music";
+      return;
+    }
+    document.title = `${activeTrack.title} - Qiaomu Music`;
+  }, [activeTrack]);
+
   async function loadTracks(autoplay = false) {
     const response = await fetch("/api/tracks", { cache: "no-store" });
     const data = await response.json();
     const next = data.tracks || [];
     setTracks(next);
     if (next.length) {
-      setActiveIndex(0);
-      if (autoplay) setTimeout(() => void playTrack(0), 150);
+      const routeTrackKey = getInitialTrackKey();
+      const routeIndex = routeTrackKey ? next.findIndex((track: Track) => matchesTrackKey(track, routeTrackKey)) : -1;
+      const preservedIndex = activeTrack ? next.findIndex((track: Track) => track.id === activeTrack.id) : -1;
+      const nextIndex = routeIndex >= 0 ? routeIndex : preservedIndex >= 0 ? preservedIndex : 0;
+      setActiveIndex(nextIndex);
+      if (routeIndex >= 0) setView("home");
+      if (autoplay) setTimeout(() => void playTrack(nextIndex), 150);
     }
   }
 
@@ -617,6 +667,38 @@ export default function App() {
     await loadTracks();
   }
 
+  function openTrack(track?: Track) {
+    if (!track) return;
+    const nextIndex = tracks.findIndex((item) => item.id === track.id);
+    if (nextIndex >= 0) setActiveIndex(nextIndex);
+    window.history.pushState({}, "", trackPath(track));
+    setView("home");
+  }
+
+  async function shareTrack(track?: Track) {
+    if (!track) return;
+    const url = new URL(trackPath(track), window.location.origin).href;
+    const title = `${track.title} - Qiaomu Music`;
+    const text = [track.artist, track.album].filter(Boolean).join(" · ");
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(url);
+      copied = true;
+      setStatus("分享链接已复制。");
+    } catch {
+      copied = false;
+    }
+    try {
+      if (navigator.share) {
+        await navigator.share({ title, text, url });
+        return;
+      }
+      if (!copied) setStatus(url);
+    } catch (error) {
+      if ((error as Error).name !== "AbortError" && !copied) setStatus("分享失败，可以稍后再试。");
+    }
+  }
+
   const progress = duration ? (time / duration) * 100 : 0;
   const theme = THEMES[settings.theme];
   const updateSettings = (next: Partial<PlayerSettings>) => setSettings((current) => ({ ...current, ...next }));
@@ -704,9 +786,21 @@ export default function App() {
                         <Light on={isPlaying} color={theme.primary} size={12} />
                         <span>{isPlaying ? "ON AIR" : "READY"}</span>
                       </div>
-                      <h1 className="player-title text-4xl font-black leading-tight tracking-normal text-foreground max-md:text-4xl">
-                        {activeTrack?.title || "Qiaomu Music"}
-                      </h1>
+                      <div className="player-title-row">
+                        <h1 className="player-title text-4xl font-black leading-tight tracking-normal text-foreground max-md:text-4xl">
+                          {activeTrack?.title || "Qiaomu Music"}
+                        </h1>
+                        <button
+                          type="button"
+                          className="share-icon-button"
+                          onClick={() => void shareTrack(activeTrack)}
+                          disabled={!activeTrack}
+                          title={activeTrack ? `分享 ${activeTrack.title}` : "暂无可分享歌曲"}
+                          aria-label="分享当前歌曲"
+                        >
+                          <Share2 size={18} />
+                        </button>
+                      </div>
                       <p className="mt-3 truncate text-base text-muted-foreground">
                         {activeTrack ? `${activeTrack.artist} · ${activeTrack.source}` : "选择一首歌，或者让电台自动开始。"}
                       </p>
@@ -801,6 +895,7 @@ export default function App() {
             categories={discovery.categories}
             styles={discovery.styles}
             playCounts={playCounts}
+            currentTrack={activeTrack}
             activeTrackId={activeTrack?.id}
             isPlaying={isPlaying}
             time={time}
@@ -809,6 +904,8 @@ export default function App() {
               if (activeTrack?.id === track.id && isPlaying) pause();
               else void playTrack(tracks.findIndex((item) => item.id === track.id));
             }}
+            onOpenTrack={openTrack}
+            onShareTrack={(track) => void shareTrack(track)}
             onPickTrack={(track) => {
               setView("home");
               void playTrack(tracks.findIndex((item) => item.id === track.id));
@@ -1218,16 +1315,19 @@ function QueuePanel({ tracks, activeId, query, setQuery, onPick }: {
   );
 }
 
-function DiscoverPanel({ tracks, categories, styles, playCounts, activeTrackId, isPlaying, time, duration, onToggleTrack, onPickTrack, onPickFacet }: {
+function DiscoverPanel({ tracks, categories, styles, playCounts, currentTrack, activeTrackId, isPlaying, time, duration, onToggleTrack, onOpenTrack, onShareTrack, onPickTrack, onPickFacet }: {
   tracks: Track[];
   categories: DiscoveryFacet[];
   styles: DiscoveryFacet[];
   playCounts: Record<string, number>;
+  currentTrack?: Track;
   activeTrackId?: string;
   isPlaying: boolean;
   time: number;
   duration: number;
   onToggleTrack: (track: Track) => void;
+  onOpenTrack: (track: Track) => void;
+  onShareTrack: (track: Track) => void;
   onPickTrack: (track: Track) => void;
   onPickFacet: (facet: DiscoveryFacet) => void;
 }) {
@@ -1283,19 +1383,31 @@ function DiscoverPanel({ tracks, categories, styles, playCounts, activeTrackId, 
     return () => media.removeEventListener("change", syncCompact);
   }, []);
 
+  const syncCoverFlowVisual = (index: number) => {
+    window.requestAnimationFrame(() => {
+      coverFlowRef.current?.updateDimensions?.(index);
+      coverFlowRef.current?._handleFigureClick?.(index, undefined, { preventDefault: () => undefined });
+    });
+  };
+
   useEffect(() => {
     if (coverFlowLengthRef.current === coverFlowTracks.length) return;
     coverFlowLengthRef.current = coverFlowTracks.length;
-    setCoverFlowIndex(coverFlowTracks.length ? Math.floor(coverFlowTracks.length / 2) : 0);
-  }, [coverFlowTracks.length]);
+    const activeCoverIndex = activeTrackId ? coverFlowTracks.findIndex((track) => track.id === activeTrackId) : -1;
+    const nextIndex = activeCoverIndex >= 0 ? activeCoverIndex : coverFlowTracks.length ? Math.floor(coverFlowTracks.length / 2) : 0;
+    setCoverFlowIndex(nextIndex);
+    if (coverFlowTracks.length) syncCoverFlowVisual(nextIndex);
+  }, [activeTrackId, coverFlowTracks]);
 
   useEffect(() => {
+    const activeCoverIndex = activeTrackId ? coverFlowTracks.findIndex((track) => track.id === activeTrackId) : -1;
+    if (activeCoverIndex >= 0 && activeCoverIndex !== coverFlowIndex) {
+      setCoverFlowIndex(activeCoverIndex);
+      syncCoverFlowVisual(activeCoverIndex);
+      return;
+    }
     if (coverFlowIndex >= coverFlowTracks.length) setCoverFlowIndex(0);
-  }, [coverFlowIndex, coverFlowTracks.length]);
-
-  const syncCoverFlowVisual = (index: number) => {
-    coverFlowRef.current?._handleFigureClick?.(index, undefined, { preventDefault: () => undefined });
-  };
+  }, [activeTrackId, coverFlowIndex, coverFlowTracks]);
   const playCoverFlowIndex = (index: number) => {
     const nextTrack = coverFlowTracks[index];
     if (!nextTrack) return;
@@ -1317,6 +1429,7 @@ function DiscoverPanel({ tracks, categories, styles, playCounts, activeTrackId, 
   const heroIsPlaying = Boolean(heroTrack && heroIsActive && isPlaying);
   const heroTime = heroIsActive ? time : 0;
   const heroDuration = heroIsActive ? duration : 0;
+  const shareTargetTrack = currentTrack || heroTrack;
 
   return (
     <main className="discover-page discover-two-column min-h-0 overflow-auto pr-1">
@@ -1325,7 +1438,19 @@ function DiscoverPanel({ tracks, categories, styles, playCounts, activeTrackId, 
           <Card.Header className="discover-cover-header p-5">
             <div>
               <p className="flex items-center gap-2 text-sm text-muted-foreground"><Compass size={16} /> Discover</p>
-              <h1 className="text-4xl font-black tracking-normal max-sm:text-3xl">发现音乐</h1>
+              <div className="discover-title-row">
+                <h1 className="text-4xl font-black tracking-normal max-sm:text-3xl">发现音乐</h1>
+                <button
+                  type="button"
+                  className="share-icon-button"
+                  onClick={() => shareTargetTrack && onShareTrack(shareTargetTrack)}
+                  disabled={!shareTargetTrack}
+                  title={shareTargetTrack ? `分享 ${shareTargetTrack.title}` : "暂无可分享歌曲"}
+                  aria-label="分享当前歌曲"
+                >
+                  <Share2 size={18} />
+                </button>
+              </div>
             </div>
           </Card.Header>
           <Card.Body className="px-5 pb-5">
@@ -1397,7 +1522,7 @@ function DiscoverPanel({ tracks, categories, styles, playCounts, activeTrackId, 
                   <button type="button" className="cover-flow-center-toggle" onClick={() => onToggleTrack(heroTrack)} title={heroIsPlaying ? `暂停 ${heroTrack.title}` : `播放 ${heroTrack.title}`}>
                     <span>{heroIsPlaying ? <Pause size={34} /> : <Play size={34} />}</span>
                   </button>
-                  <button type="button" className="cover-flow-current" onClick={() => onPickTrack(heroTrack)} title={`打开 ${heroTrack.title} 详情`}>
+                  <button type="button" className="cover-flow-current" onClick={() => onOpenTrack(heroTrack)} title={`打开 ${heroTrack.title} 详情`}>
                     <strong>{heroTrack.title}</strong>
                     <small>{formatTime(heroTime)} / {formatTime(heroDuration)} · {heroTrack.album}</small>
                   </button>

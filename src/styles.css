@@ -372,6 +372,45 @@ input[type="range"] {
   overflow-wrap: anywhere;
 }
 
+.player-title-row,
+.discover-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.player-title-row .player-title,
+.discover-title-row h1 {
+  min-width: 0;
+}
+
+.share-icon-button {
+  display: grid;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--echo-primary);
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.share-icon-button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--echo-primary) 52%, transparent);
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--echo-foreground);
+  transform: translateY(-1px);
+}
+
+.share-icon-button:disabled {
+  cursor: default;
+  opacity: 0.36;
+}
+
 .app-shell,
 .radio-layout {
   min-height: 0;
@@ -1921,6 +1960,16 @@ input[type="range"] {
 
   .discover-cover-flow {
     min-height: 320px;
+  }
+
+  .discover-title-row {
+    align-items: center;
+  }
+
+  .discover-title-row .share-icon-button,
+  .player-title-row .share-icon-button {
+    width: 38px;
+    height: 38px;
   }
 
   .cover-flow-library,
