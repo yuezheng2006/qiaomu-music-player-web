@@ -1,38 +1,21 @@
 {
   "version": 2,
-  "builds": [
+  "rewrites": [
     {
-      "src": "server.js",
-      "use": "@vercel/node"
+      "source": "/api/:path*",
+      "destination": "/api/server"
     },
     {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/server.js"
+      "source": "/music/:path*",
+      "destination": "/api/server"
     },
     {
-      "src": "/music/(.*)",
-      "dest": "/server.js"
+      "source": "/covers/:path*",
+      "destination": "/api/server"
     },
     {
-      "src": "/covers/(.*)",
-      "dest": "/server.js"
-    },
-    {
-      "src": "/health",
-      "dest": "/server.js"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/dist/$1"
+      "source": "/health",
+      "destination": "/api/server"
     }
   ],
   "env": {
